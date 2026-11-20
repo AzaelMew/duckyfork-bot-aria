@@ -31,75 +31,24 @@ const categoryNames = {
   hunting_toolkit: "Hunting Toolkit"
 };
 
-const sleep = (ms) =>
-  new Promise(resolve => setTimeout(resolve, ms));
-
-const safeNumber = (value) => {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : 0;
+const asNumber = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
 };
-
-const fmt = (value) => formatNumber(safeNumber(value));
-
-const getErrorMessage = (error) => {
-  const message =
-    typeof error === "string"
-      ? error
-      : error?.response?.data?.cause ??
-        error?.message ??
-        "Unable to calculate networth.";
-
-  return String(message).replace(/[\r\n]+/g, " ");
-};
+const fmt = (value) => formatNumber(asNumber(value));
 
 class NetworthCommand extends minecraftCommand {
   constructor(minecraft) {
     super(minecraft);
-
     this.name = "networth";
     this.aliases = ["nw"];
-    this.description = "Detailed SkyBlock networth breakdown.";
-    this.options = [
-      {
-        name: "username",
-        description: "Minecraft username",
-        required: false
-      }
-    ];
-  }
-
-  // Split guild chat messages at category boundaries.
-  async sendBreakdown(header, parts, username) {
-    const maxLength = 225;
-    const continuation = `${username} NW » `;
-
-    let line = header;
-    let first = true;
-
-    for (const part of parts) {
-      const separator = first ? " » " : " | ";
-      const addition = separator + part;
-
-      if (line.length + addition.length > maxLength) {
-        this.send(`/gc ${line}`);
-        await sleep(1250);
-
-        line = continuation + part;
-      } else {
-        line += addition;
-      }
-
-      first = false;
-    }
-
-    this.send(`/gc ${line}`);
+    this.description = "SkyBlock networth and category breakdown.";
+    this.options = [{ name: "username", description: "Minecraft username", required: false }];
   }
 
   async onCommand(player, message) {
     try {
-      const args = this.getArgs(message);
-      const target = args[0] || player;
-
+      const target = this.getArgs(message)[0] || player;
       const validName = /^[a-zA-Z0-9_]{2,16}$/;
       const validUUID = /^(?:[a-fA-F0-9]{32}|[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12})$/;
 
@@ -107,162 +56,108 @@ class NetworthCommand extends minecraftCommand {
         return this.send("/gc Invalid Minecraft username.");
       }
 
-      // Retrieve player profile
-      const result = await getLatestProfile(target, {
-        museum: true
-      });
-
-      const { profile, profileData, uuid } = result;
-      let museum = result.museum;
-
-      // The repository's profile cache can return a result
-      // without museum data from an earlier cached request.
+      const data = await getLatestProfile(target);
+      const { profile, profileData, uuid } = data;
+      let museum = data.museum;
       if (museum === undefined) {
-        const museumResult = await getMuseum(
-          profileData.profile_id,
-          uuid
-        );
-
-        museum = museumResult.museum;
+        try {
+          museum = (await getMuseum(profileData.profile_id, uuid)).museum;
+        } catch (error) {
+          console.warn("[NETWORTH MUSEUM]", error);
+          museum = null;
+        }
       }
 
       const username = validUUID.test(target)
         ? await getUsername(uuid).catch(() => target)
         : target;
-
-      const bankingBalance =
-        safeNumber(profileData.banking?.balance);
-
-      // New SkyHelper networth calculator
       const calculator = new ProfileNetworthCalculator(
         profile,
         museum,
-        bankingBalance
+        profileData.banking?.balance ?? 0
       );
-
-      const nw = await calculator.getNetworth({
-        onlyNetworth: true
-      });
-
-      if (nw.noInventory === true) {
-        return this.send(
-          `/gc ${username} has Inventory API disabled!`
-        );
+      const nw = await calculator.getNetworth({ onlyNetworth: true });
+      if (nw.noInventory) {
+        return this.send("/gc " + username + " has Inventory API disabled!");
       }
 
-      const total = safeNumber(nw.networth);
-
+      const total = asNumber(nw.networth);
       if (total <= 0) {
-        return this.send(
-          `/gc ${username}'s networth is 0.`
-        );
+        return this.send("/gc " + username + "'s networth is 0.");
       }
 
-      // Currency
-      const purse = safeNumber(nw.purse);
-      const bank = safeNumber(nw.bank ?? bankingBalance);
-      const personalBank = safeNumber(nw.personalBank);
+      const purse = asNumber(nw.purse);
+      const bank = asNumber(nw.bank ?? profileData.banking?.balance);
+      const personalBank = asNumber(nw.personalBank);
 
-      // Exclude coin categories to avoid counting them twice
-      const excludedTypes = new Set([
-        "coins",
-        "purse",
-        "bank",
-        "personalbank",
-        "personal_bank"
-      ]);
-
-      // Dynamically include all SkyHelper categories
+      const excludedTypes = new Set(["coins", "purse", "bank", "personalbank", "personal_bank"]);
       const categories = Object.entries(nw.types ?? {})
         .filter(([type]) => !excludedTypes.has(type.toLowerCase()))
-        .map(([type, data]) => ({
+        .map(([type, value]) => ({
           name: categoryNames[type] ?? capitalize(type),
-          total: safeNumber(data?.total)
+          total: asNumber(value?.total)
         }));
 
       const coins = purse + bank + personalBank;
+      if (coins > 0) categories.push({ name: "Coins", total: coins });
 
-      if (coins > 0) {
-        categories.push({
-          name: "Coins",
-          total: coins
-        });
-      }
-
-      // Sort highest to lowest
-      const sorted = categories
-        .filter(category => category.total > 0)
+      const sorted = categories.filter(({ total: value }) => value > 0)
         .sort((a, b) => b.total - a.total);
-
-      // Combine categories worth less than 1% into Other
       const major = [];
       let otherTotal = 0;
-
       for (const category of sorted) {
-        if (category.total / total >= 0.01) {
-          major.push(category);
-        } else {
-          otherTotal += category.total;
-        }
+        if (category.total / total >= 0.01) major.push(category);
+        else otherTotal += category.total;
       }
+      if (otherTotal > 0) major.push({ name: "Other", total: otherTotal });
 
-      if (otherTotal > 0) {
-        major.push({
-          name: "Other",
-          total: otherTotal
-        });
-      }
-
-      const percentage = value =>
-        ((value / total) * 100).toFixed(1);
-
-      // Minecraft guild chat
-      const header =
-        `${username}'s NW: ${fmt(total)}` +
-        ` | Purse: ${fmt(purse)}` +
-        ` | Bank: ${fmt(bank)} + ${fmt(personalBank)}`;
-
-      const parts = major.map(category =>
-        `${category.name}: ${fmt(category.total)} ` +
-        `(${percentage(category.total)}%)`
+      const percent = (value) => (100 * value / total).toFixed(1) + "%";
+      const parts = major.map((category) =>
+        category.name + ": " + fmt(category.total) + " (" + percent(category.total) + ")"
       );
 
-      await this.sendBreakdown(header, parts, username);
+      // One bounded guild-chat message. Full details stay in the Discord embed.
+      const limit = 220;
+      let summary = username + "'s NW: " + fmt(total) +
+        " | Purse: " + fmt(purse) + " | Bank: " + fmt(bank) + "+" + fmt(personalBank);
+      let shown = 0;
+      for (const part of parts) {
+        const addition = (shown === 0 ? " » " : " | ") + part;
+        if (summary.length + addition.length > limit - 18) break;
+        summary += addition;
+        shown++;
+      }
+      if (shown < parts.length && summary.length + 18 <= limit) {
+        summary += " | More on Discord";
+      }
+      this.send("/gc " + summary.slice(0, limit));
 
-      // Discord embed with full breakdown
-      const discordMessage = [
-        `**Total Networth:** ${fmt(total)}`,
-        `**Purse:** ${fmt(purse)}`,
-        `**Bank:** ${fmt(bank)}`,
-        `**Personal Bank:** ${fmt(personalBank)}`,
+      const details = [
+        "**Total:** " + fmt(total),
+        "**Purse:** " + fmt(purse),
+        "**Bank:** " + fmt(bank),
+        "**Personal Bank:** " + fmt(personalBank),
         "",
-        "**Networth Breakdown**",
-        ...major.map(category =>
-          `**${category.name}:** ${fmt(category.total)} ` +
-          `(${percentage(category.total)}%)`
+        "**Networth breakdown**",
+        ...major.map((category) =>
+          "**" + category.name + ":** " + fmt(category.total) + " (" + percent(category.total) + ")"
         )
       ].join("\n");
 
-      if (
-        typeof this.minecraft.broadcastCommandEmbed ===
-        "function"
-      ) {
+      if (typeof this.minecraft.broadcastCommandEmbed === "function") {
         try {
           await this.minecraft.broadcastCommandEmbed({
-            username: `${username}'s Networth`,
-            message: discordMessage
+            username: username + "'s networth",
+            message: details.slice(0, 3900)
           });
-        } catch (discordError) {
-          console.error(
-            "[NETWORTH DISCORD ERROR]",
-            discordError
-          );
+        } catch (error) {
+          console.error("[NETWORTH DISCORD ERROR]", error);
         }
       }
-
     } catch (error) {
       console.error("[NETWORTH ERROR]", error);
-      this.send(`/gc [ERROR] ${getErrorMessage(error)}`);
+      // Avoid exposing raw API errors or sending oversized chat messages.
+      this.send("/gc [ERROR] Could not calculate networth. Please try again later.");
     }
   }
 }

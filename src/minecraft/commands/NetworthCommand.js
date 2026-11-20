@@ -1,160 +1,165 @@
+const { getLatestProfile } = require("../../../API/functions/getLatestProfile.js");
+const { getMuseum } = require("../../../API/functions/getMuseum.js");
+const { getUsername } = require("../../contracts/API/mowojangAPI.js");
 const minecraftCommand = require("../../contracts/minecraftCommand.js");
-const config = require("../../../config.json");
-const axios = require("axios");
-const fs = require('fs');
-const { env } = require('process');
-const { getNetworth } = require('skyhelper-networth');
-const Logger = require("../.././Logger.js");
+const {
+  formatNumber,
+  capitalize
+} = require("../../contracts/helperFunctions.js");
+const { ProfileNetworthCalculator } = require("skyhelper-networth");
 
+const categoryNames = {
+  armor: "Armor",
+  equipment: "Equipment",
+  wardrobe: "Wardrobe",
+  inventory: "Inventory",
+  enderchest: "Ender Chest",
+  accessories: "Accessories",
+  personal_vault: "Personal Vault",
+  fishing_bag: "Fishing Bag",
+  potion_bag: "Potion Bag",
+  sacks_bag: "Sacks Bag",
+  candy_inventory: "Candy Inventory",
+  carnival_mask_inventory: "Carnival Masks",
+  storage: "Storage",
+  museum: "Museum",
+  sacks: "Sacks",
+  essence: "Essence",
+  pets: "Pets",
+  quiver: "Quiver",
+  farming_toolkit: "Farming Toolkit",
+  hunting_toolkit: "Hunting Toolkit"
+};
 
-async function getUUIDFromUsername(username) {
-  console.log("Getting UUID for " + username)
+const asNumber = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+};
+const fmt = (value) => formatNumber(asNumber(value));
 
-  if (!(/^[a-zA-Z0-9_]{2,16}$/mg.test(username))) {
-    return "Error"
-  }
-  else {
-    try {
-      const { data } = await axios.get('https://api.mojang.com/users/profiles/minecraft/' + username)
-      let uuid = data.id
-      let user = username
-      console.log("UUID for " + username + " is " + uuid)
-
-      return uuid
-    } catch {
-      const { data } = await axios.get('https://api.ashcon.app/mojang/v2/user/' + username)
-      let uuid = data.uuid.replace("-", "");
-      let user = username
-      console.log("UUID for " + username + " is " + uuid)
-
-      return uuid
-    }
-
-  }
-}
-function numberWithCommas(number) {
-  if (number < 1) {
-    return 0
-  }
-  number = number.toFixed(0);
-  decPlaces = 1
-  decPlaces = Math.pow(10, decPlaces);
-  var abbrev = ["k", "m", "b", "t"];
-  for (var i = abbrev.length - 1; i >= 0; i--) {
-    var size = Math.pow(10, (i + 1) * 3);
-    if (size <= number) {
-      number = Math.round(number * decPlaces / size) / decPlaces;
-      if ((number == 1000) && (i < abbrev.length - 1)) {
-        number = 1;
-        i++;
-      }
-      number += abbrev[i];
-      break;
-    }
-  }
-  return number;
-}
-function mainNum(x) {
-  try {
-    if (x > 999815672) {
-      x = x.toString().split(".")[0]
-      x = x.toString().slice(0, -6) + "815672";
-    }
-    else {
-      x = x.toString().split(".")[0]
-    }
-    return x.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  }
-  catch {
-    return "API Off"
-  }
-}
-async function getNetworthFromUsername(username) {
-  return await getNetworthFromUUID(await getUUIDFromUsername(username))
-}
-async function getNetworthFromUUID(name) {
-  try {
-    console.log(name)
-    const profiles = await axios.get(`https://api.hypixel.net/v2/skyblock/profiles?key=${config.minecraft.API.hypixelAPIkey}&uuid=${name}`);
-    let profile = profiles.data.profiles.find(p => p.selected);
-    const museum = await axios.get(`https://api.hypixel.net/v2/skyblock/museum?key=${config.minecraft.API.hypixelAPIkey}&profile=${profile.profile_id}`)
-    let museumData = museum.data.members[name]
-    const profileData = await profile.members[name];
-    const bankBalance = await profile.banking?.balance;
-
-    const networth = await getNetworth(profileData, bankBalance, { v2Endpoint: true, museumData });
-    let total = networth.networth ?? 0
-    let purse = networth?.purse ?? 0
-    let bank = networth?.bank ?? 0
-    let bankP = networth?.personalBank ?? 0
-
-    let ret
-    let armor = networth?.types?.armor?.total ?? 0
-    let wardrobe = networth?.types?.wardrobe?.total ?? 0
-    let inventory = networth?.types?.inventory?.total ?? 0
-    let ec = networth?.types?.enderchest?.total ?? 0
-    let storage = networth?.types?.storage?.total ?? 0
-    let pets = networth?.types?.pets?.total ?? 0
-    let acc = networth?.types?.accessories?.total ?? 0
-    let equ = networth?.types?.equipment?.total ?? 0
-    let museuma = networth?.types?.museum?.total ?? 0
-    let sacks = networth?.types?.sacks?.total ?? 0
-
-    let storageec
-
-    storageec = ec + storage
-    ret = "˚**Total**:\n➣ $" + mainNum(total) + "¨ **Purse:**\n➣ $" + numberWithCommas(purse) + "¨ **Bank:**\n➣ $" + numberWithCommas(bank) + "/" + numberWithCommas(bankP) + "¨ **Armor:**\n➣ $" + numberWithCommas(armor) + "¨ **Equipment:**\n➣ $" + numberWithCommas(equ) + "¨ **Wardrobe:**\n➣ $" + numberWithCommas(wardrobe) + "¨ **Inventory:**\n➣ $" + numberWithCommas(inventory) + "¨ **Storage:**\n➣ $" + numberWithCommas(storageec) + "¨ **Pets:**\n➣ $" + numberWithCommas(pets) + "¨ **Talis:**\n➣ $" + numberWithCommas(acc) + "¨ **Museum:**\n➣ $" + numberWithCommas(museuma) + "¨ **Sacks:**\n➣ $" + numberWithCommas(sacks)
-    return ret
-  } catch (error) {
-    return error
-  }
-}
 class NetworthCommand extends minecraftCommand {
   constructor(minecraft) {
-    super(minecraft)
-
-    this.name = 'networth'
-    this.aliases = ['nw']
-    this.description = "Checks user's networth"
+    super(minecraft);
+    this.name = "networth";
+    this.aliases = ["nw"];
+    this.description = "SkyBlock networth and category breakdown.";
+    this.options = [{ name: "username", description: "Minecraft username", required: false }];
   }
 
-  async onCommand(username, message) {
+  async onCommand(player, message) {
+    try {
+      const target = this.getArgs(message)[0] || player;
+      const validName = /^[a-zA-Z0-9_]{2,16}$/;
+      const validUUID = /^(?:[a-fA-F0-9]{32}|[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12})$/;
 
-    let args = message.split(" ")
-    if (message.toLowerCase().endsWith("!nw")) {
-      getNetworthFromUsername(username).then(nw => {
-        if (nw.includes("[ERROR]")) {
-          this.send(`/gc ${nw}`)
+      if (!validName.test(target) && !validUUID.test(target)) {
+        return this.send("/gc Invalid Minecraft username.");
+      }
+
+      const data = await getLatestProfile(target);
+      const { profile, profileData, uuid } = data;
+      let museum = data.museum;
+      if (museum === undefined) {
+        try {
+          museum = (await getMuseum(profileData.profile_id, uuid)).museum;
+        } catch (error) {
+          console.warn("[NETWORTH MUSEUM]", error);
+          museum = null;
         }
-        else {
-          this.send(`/gc ${username}'s networth: ${nw.replaceAll("*", "").replaceAll("\n➣", "").replaceAll("\n", "").replaceAll(";", "").replaceAll("¨", "˚")}`)
-          this.minecraft.broadcastCommandEmbed({ username: `${username}'s networth`, message: `${nw.replaceAll("¨", "\n").replace("˚", "")}` })
+      }
+
+      const username = validUUID.test(target)
+        ? await getUsername(uuid).catch(() => target)
+        : target;
+      const calculator = new ProfileNetworthCalculator(
+        profile,
+        museum,
+        profileData.banking?.balance ?? 0
+      );
+      const nw = await calculator.getNetworth({ onlyNetworth: true });
+      if (nw.noInventory) {
+        return this.send("/gc " + username + " has Inventory API disabled!");
+      }
+
+      const total = asNumber(nw.networth);
+      if (total <= 0) {
+        return this.send("/gc " + username + "'s networth is 0.");
+      }
+
+      const purse = asNumber(nw.purse);
+      const bank = asNumber(nw.bank ?? profileData.banking?.balance);
+      const personalBank = asNumber(nw.personalBank);
+
+      const excludedTypes = new Set(["coins", "purse", "bank", "personalbank", "personal_bank"]);
+      const categories = Object.entries(nw.types ?? {})
+        .filter(([type]) => !excludedTypes.has(type.toLowerCase()))
+        .map(([type, value]) => ({
+          name: categoryNames[type] ?? capitalize(type),
+          total: asNumber(value?.total)
+        }));
+
+      const coins = purse + bank + personalBank;
+      if (coins > 0) categories.push({ name: "Coins", total: coins });
+
+      const sorted = categories.filter(({ total: value }) => value > 0)
+        .sort((a, b) => b.total - a.total);
+      const major = [];
+      let otherTotal = 0;
+      for (const category of sorted) {
+        if (category.total / total >= 0.01) major.push(category);
+        else otherTotal += category.total;
+      }
+      if (otherTotal > 0) major.push({ name: "Other", total: otherTotal });
+
+      const percent = (value) => (100 * value / total).toFixed(1) + "%";
+      const parts = major.map((category) =>
+        category.name + ": " + fmt(category.total) + " (" + percent(category.total) + ")"
+      );
+
+      // One bounded guild-chat message. Full details stay in the Discord embed.
+      const limit = 220;
+      let summary = username + "'s NW: " + fmt(total) +
+        " | Purse: " + fmt(purse) + " | Bank: " + fmt(bank) + "+" + fmt(personalBank);
+      let shown = 0;
+      for (const part of parts) {
+        const addition = (shown === 0 ? " » " : " | ") + part;
+        if (summary.length + addition.length > limit - 18) break;
+        summary += addition;
+        shown++;
+      }
+      if (shown < parts.length && summary.length + 18 <= limit) {
+        summary += " | More on Discord";
+      }
+      this.send("/gc " + summary.slice(0, limit));
+
+      const details = [
+        "**Total:** " + fmt(total),
+        "**Purse:** " + fmt(purse),
+        "**Bank:** " + fmt(bank),
+        "**Personal Bank:** " + fmt(personalBank),
+        "",
+        "**Networth breakdown**",
+        ...major.map((category) =>
+          "**" + category.name + ":** " + fmt(category.total) + " (" + percent(category.total) + ")"
+        )
+      ].join("\n");
+
+      if (typeof this.minecraft.broadcastCommandEmbed === "function") {
+        try {
+          await this.minecraft.broadcastCommandEmbed({
+            username: username + "'s networth",
+            message: details.slice(0, 3900)
+          });
+        } catch (error) {
+          console.error("[NETWORTH DISCORD ERROR]", error);
         }
-      })
-    }
-    else if (message.toLowerCase().endsWith("!networth")) {
-      getNetworthFromUsername(username).then(nw => {
-        if (nw.includes("[ERROR]")) {
-          this.send(`/gc ${nw}`)
-        }
-        else {
-          this.send(`/gc ${username}'s networth: ${nw.replaceAll("*", "").replaceAll("\n➣", "").replaceAll("\n", "").replaceAll(";", "").replaceAll("¨", "˚")}`)
-          this.minecraft.broadcastCommandEmbed({ username: `${username}'s networth`, message: `${nw.replaceAll("¨", "\n").replace("˚", "")}` })
-        }
-      })
-    }
-    else {
-      getNetworthFromUsername(args[1]).then(nw => {
-        if (nw.includes("[ERROR]")) {
-          this.send(`/gc ${nw}`)
-        }
-        else {
-          this.send(`/gc ${args[1]}'s networth: ${nw.replaceAll("*", "").replaceAll("\n➣", "").replaceAll("\n", "").replaceAll(";", "").replaceAll("¨", "˚")}`)
-          this.minecraft.broadcastCommandEmbed({ username: `${args[1]}'s networth`, message: `${nw.replaceAll("¨", "\n").replace("˚", "")}` })
-        }
-      })
+      }
+    } catch (error) {
+      console.error("[NETWORTH ERROR]", error);
+      // Avoid exposing raw API errors or sending oversized chat messages.
+      this.send("/gc [ERROR] Could not calculate networth. Please try again later.");
     }
   }
 }
 
-module.exports = NetworthCommand
+module.exports = NetworthCommand;

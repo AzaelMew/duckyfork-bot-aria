@@ -7,7 +7,8 @@ const getDungeons = require("../../../API/stats/dungeons.js");
 const getSkills = require("../../../API/stats/skills.js");
 const getSlayer = require("../../../API/stats/slayer.js");
 const getHotm = require("../../../API/stats/hotm.js");
-const { getNetworth } = require("skyhelper-networth");
+const { ProfileNetworthCalculator } = require("skyhelper-networth");
+const { getMuseum } = require("../../../API/functions/getMuseum.js");
 
 class SkyblockCommand extends minecraftCommand {
   constructor(minecraft) {
@@ -32,14 +33,26 @@ class SkyblockCommand extends minecraftCommand {
       const data = await getLatestProfile(username);
       username = formatUsername(username, data.profileData.game_mode);
 
+      // getLatestProfile may return cached data without museum information.
+      let museum = data.museum;
+      if (museum === undefined) {
+        try {
+          museum = (await getMuseum(data.profileData.profile_id, data.uuid)).museum;
+        } catch (error) {
+          console.warn("[SKYBLOCK MUSEUM]", error);
+          museum = null;
+        }
+      }
+      const networthManager = new ProfileNetworthCalculator(
+        data.profile,
+        museum,
+        data.profileData?.banking?.balance ?? 0,
+      );
+
       const [skills, slayer, networth, dungeons, talismans, hotm] = await Promise.all([
         getSkills(data.profile),
         getSlayer(data.profile),
-        getNetworth(data.profile, data.profileData?.banking?.balance || 0, {
-          onlyNetworth: true,
-          v2Endpoint: true,
-          cache: true,
-        }),
+        networthManager.getNetworth({ onlyNetworth: true }),
         getDungeons(data.profile),
         getTalismans(data.profile),
         getHotm(data.player, data.profile),

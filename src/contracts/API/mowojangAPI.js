@@ -3,6 +3,24 @@ const axios = require("axios");
 const uuidCache = new Map();
 const usernameCache = new Map();
 
+// Try the mowojang proxy first; on anything but a definitive "not found", fall back to Mojang.
+// Resolves to {id, name} or null when the player definitively does not exist.
+async function fetchProfile(query, fallbackUrl) {
+  try {
+    const { data } = await axios.get(`https://mowojang.matdoes.dev/${query}`, { timeout: 5000 });
+    if (data && !data.errorMessage && data.id !== undefined) return data;
+  } catch (error) {
+    if (error.response?.data === "Not found") return null;
+  }
+  try {
+    const { data } = await axios.get(fallbackUrl, { timeout: 10000 });
+    return data?.id ? data : null;
+  } catch (error) {
+    if ([204, 404].includes(error.response?.status)) return null;
+    throw error;
+  }
+}
+
 async function getUUID(username) {
   try {
     if (uuidCache.has(username)) {
@@ -13,11 +31,9 @@ async function getUUID(username) {
       }
     }
 
-    const { data } = await axios.get(`https://mowojang.matdoes.dev/${username}`);
-
-    if (data.errorMessage || data.id === undefined) {
-      throw data.errorMessage ?? "Invalid username.";
-    }
+    const data = await fetchProfile(username, `https://api.mojang.com/users/profiles/minecraft/${username}`);
+    // eslint-disable-next-line no-throw-literal
+    if (!data) throw "Invalid username.";
 
     uuidCache.set(username, {
       last_save: Date.now(),
@@ -26,9 +42,7 @@ async function getUUID(username) {
 
     return data.id;
   } catch (error) {
-    // eslint-disable-next-line no-throw-literal
-    if (error.response.data === "Not found") throw "Invalid username.";
-    console.log(error);
+    if (error !== "Invalid username.") console.log(error);
     throw error;
   }
 }
@@ -43,10 +57,9 @@ async function getUsername(uuid) {
       }
     }
 
-    const { data } = await axios.get(`https://mowojang.matdoes.dev/${uuid}`);
-    if (data.errorMessage || data.name === undefined) {
-      throw data.errorMessage ?? "Invalid UUID.";
-    }
+    const data = await fetchProfile(uuid, `https://sessionserver.mojang.com/session/minecraft/profile/${uuid}`);
+    // eslint-disable-next-line no-throw-literal
+    if (!data || data.name === undefined) throw "Invalid UUID.";
 
     const cache = {
       last_save: Date.now(),
@@ -57,9 +70,7 @@ async function getUsername(uuid) {
 
     return data.name;
   } catch (error) {
-    console.log(error);
-    // eslint-disable-next-line no-throw-literal
-    if (error.response?.data === "Not found") throw "Invalid UUID.";
+    if (error !== "Invalid UUID.") console.log(error);
     throw error;
   }
 }
@@ -74,7 +85,7 @@ async function resolveUsernameOrUUID(username) {
     };
   } catch (error) {
     // eslint-disable-next-line no-throw-literal
-    if (error.response.data === "Not found") throw "Invalid Username Or UUID.";
+    if (error.response?.data === "Not found") throw "Invalid Username Or UUID.";
     console.log(error);
     throw error;
   }
